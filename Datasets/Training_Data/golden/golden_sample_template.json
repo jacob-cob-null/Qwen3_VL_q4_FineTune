@@ -1,0 +1,43 @@
+{
+  "sample_id": "paige_synth_000001",
+  "source_dataset": "paige_synthetic",
+  "split": "train",
+  "is_synthetic": true,
+  "seed": 42,
+  "image_path": "Datasets/Training_Data/Synthetic Data/images/paige_synth_000001.png",
+  "metadata": {
+    "template_id": 1,
+    "generator": "faker_fil_PH+nemotron_mini_4b_q4+reportlab+augraphy",
+    "source_reference_id": null,
+    "notes": "Set null for unknown optional metadata fields."
+  },
+  "ground_truth": {
+    "date": "2026-03-01",
+    "patient_name": "Juan Dela Cruz",
+    "philhealth_number": "12-345678901-2",
+    "diagnosis_code": "I10",
+    "procedure_code": "93000",
+    "total_amount": "5300.00",
+    "philhealth_benefit": "1500.00",
+    "balance_due": "3800.00"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image",
+          "image": "Datasets/Training_Data/Synthetic Data/images/paige_synth_000001.png"
+        },
+        {
+          "type": "text",
+          "text": "Extract all billing fields. Return JSON with: date, patient_name, philhealth_number, diagnosis_code, procedure_code, total_amount, philhealth_benefit, balance_due. Use null for missing fields."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "{\"date\": \"2026-03-01\", \"patient_name\": \"Juan Dela Cruz\", \"philhealth_number\": \"12-345678901-2\", \"diagnosis_code\": \"I10\", \"procedure_code\": \"93000\", \"total_amount\": \"5300.00\", \"philhealth_benefit\": \"1500.00\", \"balance_due\": \"3800.00\"}"
+    }
+  ]
+}

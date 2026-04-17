@@ -1,0 +1,1 @@
+$env:TORCHDYNAMO_DISABLE='1'; .\.venv311\Scripts\python.exe train.py --id A

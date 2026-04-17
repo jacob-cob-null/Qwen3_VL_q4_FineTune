@@ -1,0 +1,24 @@
+.venv311
+Datasets/Testing_Data/sroie_2019_v2
+Datasets/Training_Data/golden/merged
+Datasets/Training_Data/golden/sources
+
+# Model output and large binary files
+paige-*
+checkpoint-*
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.lib
+*.dll
+
+# Cache and temporary files
+__pycache__/
+unsloth_compiled_cache/
+.ipynb_checkpoints/
+*.pyc
+*.pyo
+*.pyd
+.env
+.pytest_cache/

@@ -1,0 +1,8 @@
+# Non-AI utilities only (Torch/AI stack installed manually with --no-deps)
+pillow
+faker
+reportlab
+augraphy
+scikit-learn
+scipy
+matplotlib

@@ -1,0 +1,468 @@
+{
+  "condition_id": "A",
+  "adapter_path": "./paige-smoketest",
+  "num_samples": 20,
+  "metrics": {
+    "exact_match": 0.0,
+    "macro_f1": 0.0513,
+    "per_field": {
+      "date": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0
+      },
+      "patient_name": {
+        "precision": 0.0,
+        "recall": 0,
+        "f1": 0
+      },
+      "philhealth_number": {
+        "precision": 0.0,
+        "recall": 0,
+        "f1": 0
+      },
+      "diagnosis_code": {
+        "precision": 0.0,
+        "recall": 0,
+        "f1": 0
+      },
+      "procedure_code": {
+        "precision": 0.0,
+        "recall": 0,
+        "f1": 0
+      },
+      "total_amount": {
+        "precision": 0.2667,
+        "recall": 0.2,
+        "f1": 0.2286
+      },
+      "philhealth_benefit": {
+        "precision": 0.0,
+        "recall": 0,
+        "f1": 0
+      },
+      "balance_due": {
+        "precision": 0.2308,
+        "recall": 0.15,
+        "f1": 0.1818
+      }
+    }
+  },
+  "predictions": [
+    {
+      "gt": {
+        "date": "15/01/2019",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "193.00",
+        "philhealth_benefit": null,
+        "balance_due": "193.00"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "1234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "84654321",
+        "total_amount": "1500.00",
+        "philhealth_benefit": "1000.00",
+        "balance_due": "500.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"1234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"84654321\", \"total_amount\": \"1500.00\", \"philhealth_benefit\": \"1000.00\", \"balance_due\": \"500.00\"}"
+    },
+    {
+      "gt": {
+        "date": "02/01/2019",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "170.00",
+        "philhealth_benefit": null,
+        "balance_due": "170.00"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "TAN CHAY YEE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "A15.2",
+        "procedure_code": "36000",
+        "total_amount": "170.00",
+        "philhealth_benefit": "100.00",
+        "balance_due": "70.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"TAN CHAY YEE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"A15.2\", \"procedure_code\": \"36000\", \"total_amount\": \"170.00\", \"philhealth_benefit\": \"100.00\", \"balance_due\": \"70.00\"}"
+    },
+    {
+      "gt": {
+        "date": "09/02/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "436.20",
+        "philhealth_benefit": null,
+        "balance_due": "436.20"
+      },
+      "pred": {},
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"{'total_amount': '436.20' 'cash': '436.20' 'change': '0.00' 'gst': '24.69' 'total_gst': '24.69' 'total_excl_gst': '411.50' 'discount': '0.00' 'rounding': '0.01' 'total_rice': '436.20' 'balance_due': '0.00' 'gst_summary': 'SR: 411.50 24.69 Total: 411.50 24.69' 'goods_sold_not_returnable': 'true' 'thank_you': 'true' 'date': '09/02/2018' 'time': '08:32:00' 'cashier': 'USER' 'salesperson': 'USER' 'receipt_no': 'CS0002258'"
+    },
+    {
+      "gt": {
+        "date": "01/02/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "4.90",
+        "philhealth_benefit": null,
+        "balance_due": "4.90"
+      },
+      "pred": {
+        "date": null,
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "{'total': '4.90' 'cash': '5.00' 'change': '0.10' 'gst': '0.28' 'total_inc_gst': '4.90' 'gst_summary': 'A=6.00% 4.62 0.28' 'total_includes_gst': 'yes' 'petron_miles': '3000' 'fuel': 'RM45'}`",
+        "philhealth_benefit": null,
+        "balance_due": null
+      },
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"{'total': '4.90' 'cash': '5.00' 'change': '0.10' 'gst': '0.28' 'total_inc_gst': '4.90' 'gst_summary': 'A=6.00% 4.62 0.28' 'total_includes_gst': 'yes' 'petron_miles': '3000' 'fuel': 'RM45'}`\", \"philhealth_benefit\": null, \"balance_due\": null}"
+    },
+    {
+      "gt": {
+        "date": "18/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "38.90",
+        "philhealth_benefit": null,
+        "balance_due": "38.90"
+      },
+      "pred": {},
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"{'total_amount': '38.90' 'cash_tendered': '50.00' 'change': '11.10' 'total_includes_gst': '2.20' 'takeout_total_incl_gst': '38.90' 'total_rounded': '38.90' 'qty_item': '2 M SpicyDeluxe 2 M Coke 2 M Fries 1 M GrilChicBgr 1 M Coke 1 M Fries 1 Small Cone' 'invoice_number': 'INV# 2141900016842' 'order_number': 'ORD #90 -REG #19- 18/01/2018 17:09:21' 'tel_number': '03-4147-3107' 'gst_id_no': '000504664064' 'licensee_of_mcdonald"
+    },
+    {
+      "gt": {
+        "date": "05/02/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "7.30",
+        "philhealth_benefit": null,
+        "balance_due": "7.30"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "1234567890",
+        "total_amount": "1500.00",
+        "philhealth_benefit": "1000.00",
+        "balance_due": "500.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"1234567890\", \"total_amount\": \"1500.00\", \"philhealth_benefit\": \"1000.00\", \"balance_due\": \"500.00\"}"
+    },
+    {
+      "gt": {
+        "date": "29/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "6.35",
+        "philhealth_benefit": null,
+        "balance_due": "6.35"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "1234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "1234567890",
+        "total_amount": "1500.00",
+        "philhealth_benefit": "500.00",
+        "balance_due": "1000.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"1234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"1234567890\", \"total_amount\": \"1500.00\", \"philhealth_benefit\": \"500.00\", \"balance_due\": \"1000.00\"}"
+    },
+    {
+      "gt": {
+        "date": "31/12/2017",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "7.95",
+        "philhealth_benefit": null,
+        "balance_due": "7.95"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "1234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "1234567890",
+        "total_amount": "1500.00",
+        "philhealth_benefit": "1000.00",
+        "balance_due": "500.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"1234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"1234567890\", \"total_amount\": \"1500.00\", \"philhealth_benefit\": \"1000.00\", \"balance_due\": \"500.00\"}"
+    },
+    {
+      "gt": {
+        "date": "08/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "8.00",
+        "philhealth_benefit": null,
+        "balance_due": "8.00"
+      },
+      "pred": {},
+      "raw": "{\"date\": \"2018-08-01\", \"patient_name\": \"R. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M. M."
+    },
+    {
+      "gt": {
+        "date": "20/11/2017",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "278.80",
+        "philhealth_benefit": null,
+        "balance_due": "278.80"
+      },
+      "pred": {
+        "date": "2017-11-20",
+        "patient_name": "ESWARAN 012-6369400",
+        "philhealth_number": "012-6369400",
+        "diagnosis_code": "Y51129",
+        "procedure_code": "Y52683",
+        "total_amount": "278.80",
+        "philhealth_benefit": "0.00",
+        "balance_due": "278.80"
+      },
+      "raw": "{\"date\": \"2017-11-20\", \"patient_name\": \"ESWARAN 012-6369400\", \"philhealth_number\": \"012-6369400\", \"diagnosis_code\": \"Y51129\", \"procedure_code\": \"Y52683\", \"total_amount\": \"278.80\", \"philhealth_benefit\": \"0.00\", \"balance_due\": \"278.80\"}"
+    },
+    {
+      "gt": {
+        "date": "20-11-17",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "169.80",
+        "philhealth_benefit": null,
+        "balance_due": "169.80"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "846543210987654321",
+        "total_amount": "15000.00",
+        "philhealth_benefit": "10000.00",
+        "balance_due": "5000.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"846543210987654321\", \"total_amount\": \"15000.00\", \"philhealth_benefit\": \"10000.00\", \"balance_due\": \"5000.00\"}"
+    },
+    {
+      "gt": {
+        "date": "23.03.18",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "1.00",
+        "philhealth_benefit": null,
+        "balance_due": "1.00"
+      },
+      "pred": {
+        "date": null,
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "1.00",
+        "philhealth_benefit": null,
+        "balance_due": null
+      },
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"1.00\", \"philhealth_benefit\": null, \"balance_due\": null}"
+    },
+    {
+      "gt": {
+        "date": "20/11/2017",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "278.80",
+        "philhealth_benefit": null,
+        "balance_due": "278.80"
+      },
+      "pred": {
+        "date": "2017-11-20",
+        "patient_name": "ESWARAN 012-6369400",
+        "philhealth_number": "012-6369400",
+        "diagnosis_code": "Y51129",
+        "procedure_code": "Y52683",
+        "total_amount": "278.80",
+        "philhealth_benefit": "0.00",
+        "balance_due": "278.80"
+      },
+      "raw": "{\"date\": \"2017-11-20\", \"patient_name\": \"ESWARAN 012-6369400\", \"philhealth_number\": \"012-6369400\", \"diagnosis_code\": \"Y51129\", \"procedure_code\": \"Y52683\", \"total_amount\": \"278.80\", \"philhealth_benefit\": \"0.00\", \"balance_due\": \"278.80\"}"
+    },
+    {
+      "gt": {
+        "date": "22 MAR 18",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "30.25",
+        "philhealth_benefit": null,
+        "balance_due": "30.25"
+      },
+      "pred": {
+        "date": null,
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "30.24",
+        "philhealth_benefit": null,
+        "balance_due": "30.25"
+      },
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"30.24\", \"philhealth_benefit\": null, \"balance_due\": \"30.25\"}"
+    },
+    {
+      "gt": {
+        "date": "20/03/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "53.00",
+        "philhealth_benefit": null,
+        "balance_due": "53.00"
+      },
+      "pred": {},
+      "raw": "{\"date\": \"2020-03-20\", \"patient_name\": \"JEFF RODRIGUEZ\", \"philhealth_number\": \"21000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "gt": {
+        "date": "27/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "27.35",
+        "philhealth_benefit": null,
+        "balance_due": "27.35"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JOHN DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "1234567890",
+        "total_amount": "1500.00",
+        "philhealth_benefit": "1000.00",
+        "balance_due": "500.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JOHN DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"1234567890\", \"total_amount\": \"1500.00\", \"philhealth_benefit\": \"1000.00\", \"balance_due\": \"500.00\"}"
+    },
+    {
+      "gt": {
+        "date": "15/03/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "127.20",
+        "philhealth_benefit": null,
+        "balance_due": "127.20"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JOHN DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "Z00.0",
+        "procedure_code": "1234567890",
+        "total_amount": "15000.00",
+        "philhealth_benefit": "10000.00",
+        "balance_due": "5000.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JOHN DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"Z00.0\", \"procedure_code\": \"1234567890\", \"total_amount\": \"15000.00\", \"philhealth_benefit\": \"10000.00\", \"balance_due\": \"5000.00\"}"
+    },
+    {
+      "gt": {
+        "date": "29/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "1.05",
+        "philhealth_benefit": null,
+        "balance_due": "1.05"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "E11.9",
+        "procedure_code": "CPT-1234567890",
+        "total_amount": "15000.00",
+        "philhealth_benefit": "10000.00",
+        "balance_due": "5000.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"E11.9\", \"procedure_code\": \"CPT-1234567890\", \"total_amount\": \"15000.00\", \"philhealth_benefit\": \"10000.00\", \"balance_due\": \"5000.00\"}"
+    },
+    {
+      "gt": {
+        "date": "02/01/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "4.20",
+        "philhealth_benefit": null,
+        "balance_due": "4.20"
+      },
+      "pred": {},
+      "raw": "{\"date\": null, \"patient_name\": null, \"philhealth_number\": null, \"diagnosis_code\": null, \"procedure_code\": null, \"total_amount\": \"{'total_amount': '4.20' 'cash': '50.20' 'change': '46.00' 'gst': '0.24' 'total': '4.20' 'cash': '50.20' 'change': '46.00' 'gst': '0.24' 'total': '4.20' 'cash': '50.20' 'change': '46.00' 'gst': '0.24' 'total': '4.20' 'cash': '50.20' 'change': '46.00' 'gst': '0.24' 'total': '4.20' 'cash': '50.20' 'change': '46.00' 'gst': '0.24' 'total': '4.20' 'cash': '50.20' 'change': '46.00'"
+    },
+    {
+      "gt": {
+        "date": "02/03/2018",
+        "patient_name": null,
+        "philhealth_number": null,
+        "diagnosis_code": null,
+        "procedure_code": null,
+        "total_amount": "31.90",
+        "philhealth_benefit": null,
+        "balance_due": "31.90"
+      },
+      "pred": {
+        "date": "2025-04-05",
+        "patient_name": "JANE DOE",
+        "philhealth_number": "12345678901234567890",
+        "diagnosis_code": "E11.9",
+        "procedure_code": "CPT-1234567890",
+        "total_amount": "15000.00",
+        "philhealth_benefit": "10000.00",
+        "balance_due": "5000.00"
+      },
+      "raw": "{\"date\": \"2025-04-05\", \"patient_name\": \"JANE DOE\", \"philhealth_number\": \"12345678901234567890\", \"diagnosis_code\": \"E11.9\", \"procedure_code\": \"CPT-1234567890\", \"total_amount\": \"15000.00\", \"philhealth_benefit\": \"10000.00\", \"balance_due\": \"5000.00\"}"
+    }
+  ]
+}
