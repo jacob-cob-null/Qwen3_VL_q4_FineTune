@@ -78,26 +78,43 @@ def extract_common_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(gt_parse, dict):
         gt = gt_parse
 
-    # Handle CORD v2 nested total structure: gt_parse.total.total_price
-    total_obj = gt.get("total")
-    if isinstance(total_obj, dict):
+    # --- Invoices-Donut: fields are nested under header/items/summary ---
+    # Structure: gt_parse.header.{invoice_date, seller, client}
+    #            gt_parse.summary.{total_gross_worth, total_net_worth, total_vat}
+    header_obj  = gt.get("header")  if isinstance(gt, dict) else None
+    summary_obj = gt.get("summary") if isinstance(gt, dict) else None
+
+    # Flatten header fields into gt so generic lookups below find them
+    if isinstance(header_obj, dict):
+        for key in ("invoice_date", "invoice_no", "seller", "client"):
+            if key in header_obj and key not in gt:
+                gt[key] = header_obj[key]
+
+    # Resolve total: prefer summary.total_gross_worth (Invoices-Donut),
+    # then CORD v2's nested total.total_price, then flat fields.
+    total = None
+    if isinstance(summary_obj, dict):
         total = find_first_value(
-            total_obj,
-            ["total_price", "total_amount", "total", "grand_total"],
-        )
-    elif isinstance(total_obj, (str, int, float)):
-        total = total_obj
-    else:
-        total = find_first_value(
-            gt,
-            [
-                "total_amount",
-                "amount_total",
-                "grand_total",
-                "total_price",
-            ],
+            summary_obj,
+            ["total_gross_worth", "total_price", "total_amount", "grand_total"],
         )
 
+    if total is None:
+        total_obj = gt.get("total")
+        if isinstance(total_obj, dict):
+            total = find_first_value(
+                total_obj,
+                ["total_price", "total_amount", "total", "grand_total"],
+            )
+        elif isinstance(total_obj, (str, int, float)):
+            total = total_obj
+        else:
+            total = find_first_value(
+                gt,
+                ["total_amount", "amount_total", "grand_total", "total_price"],
+            )
+
+    # patient_name: medical field first, then invoice counterparts
     patient = find_first_value(
         gt,
         [
@@ -106,11 +123,19 @@ def extract_common_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
             "customer_name",
             "name",
             "recipient",
+            "client",   # Invoices-Donut header.client
+            "seller",   # fallback
         ],
     )
 
+    # date: medical/invoice variants
+    date = find_first_value(
+        gt,
+        ["date", "invoice_date", "issued_date"],
+    )
+
     return {
-        "date": find_first_value(gt, ["date", "invoice_date", "issued_date"]),
+        "date": date,
         "patient_name": str(patient).strip() if patient is not None else None,
         "philhealth_number": find_first_value(
             gt, ["philhealth_number", "philhealth_no", "member_id"]
@@ -233,6 +258,7 @@ def main() -> None:
     base_dir = Path(args.base_dir)
 
     plan = [
+        # Training splits (real datasets)
         {
             "hf_id": "naver-clova-ix/cord-v2",
             "hf_split": "train",
@@ -245,10 +271,17 @@ def main() -> None:
             "source_dataset": "invoices_donut_v1",
             "target_split": "train",
         },
+        # Evaluation test splits (cord_v2 + invoices_donut_v1)
         {
-            "hf_id": "rth/sroie-2019-v2",
+            "hf_id": "naver-clova-ix/cord-v2",
             "hf_split": "test",
-            "source_dataset": "sroie_2019_v2",
+            "source_dataset": "cord_v2",
+            "target_split": "test",
+        },
+        {
+            "hf_id": "katanaml-org/invoices-donut-data-v1",
+            "hf_split": "test",
+            "source_dataset": "invoices_donut_v1",
             "target_split": "test",
         },
     ]
