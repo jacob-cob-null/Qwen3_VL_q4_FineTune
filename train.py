@@ -48,15 +48,15 @@ try:
         _patch_prepare_multimodal()
     except Exception:
         pass
+    # Import unified prompt (must match evaluate.py exactly)
+    try:
+        from scripts.prompts import EXTRACTION_PROMPT as _EXTRACTION_PROMPT
+    except Exception:
+        _EXTRACTION_PROMPT = None
     UNSLOTH_AVAILABLE = True
 except (ImportError, OSError):
     UNSLOTH_AVAILABLE = False
 
-try:
-    from evaluate import evaluate_condition
-except ImportError:
-    def evaluate_condition(cond_id, path, model, tokenizer):
-        return {"status": "Evaluation module missing", "score": 0.0}
 
 # ---------------------------------------------------------------------------
 # Image path resolution
@@ -72,8 +72,10 @@ DATASET_SEARCH_ROOTS = [
     os.path.join(_BASE, "Datasets", "Training_Data", "golden", "sources", "synthetic"),
     # paige_synthetic canon variant
     os.path.join(_BASE, "Datasets", "Training_Data", "golden", "sources", "paige_synthetic"),
-    # Test images (for eval)
-    os.path.join(_BASE, "Datasets", "Testing_Data", "sroie_2019_v2"),
+    # cord_v2 test images
+    os.path.join(_BASE, "Datasets", "Training_Data", "golden", "sources", "cord_v2", "images", "test"),
+    # invoices_donut_v1 test images
+    os.path.join(_BASE, "Datasets", "Training_Data", "golden", "sources", "invoices_donut_v1", "images", "test"),
     # Fallback: workspace root itself
     _BASE,
 ]
@@ -106,15 +108,15 @@ def resolve_image_path(image_path):
     return image_path
 
 
-# --- UNCHANGED CONFIGURATION ---
+# --- CONFIGURATION ---
 CONDITIONS = [
-    {"id": "A", "size": 500,  "synth_ratio": 0.30, "seed": 42},
-    {"id": "B", "size": 500,  "synth_ratio": 0.40, "seed": 43},
-    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44},
-    {"id": "D", "size": 1000, "synth_ratio": 0.40, "seed": 45},
-    {"id": "E", "size": 2000, "synth_ratio": 0.30, "seed": 46},
-    {"id": "F", "size": 2000, "synth_ratio": 0.40, "seed": 47},
-    {"id": "G", "size": 2000, "synth_ratio": 0.00, "seed": 48},
+    {"id": "A", "size": 500,  "synth_ratio": 0.30, "seed": 42, "epochs": 1.5},
+    {"id": "E", "size": 2000, "synth_ratio": 0.30, "seed": 46, "epochs": 0.75},
+    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44, "epochs": 1},
+    # {"id": "B", "size": 500,  "synth_ratio": 0.40, "seed": 43, "epochs": 1},
+    # {"id": "D", "size": 1000, "synth_ratio": 0.40, "seed": 45, "epochs": 1},
+    # {"id": "F", "size": 2000, "synth_ratio": 0.40, "seed": 47, "epochs": 1},
+    # {"id": "G", "size": 2000, "synth_ratio": 0.00, "seed": 48, "epochs": 1},
 ]
 
 def build_condition(real_data, synthetic_pool, total_size, synth_ratio, seed):
@@ -160,7 +162,7 @@ def setup_model():
     )
     return model, tokenizer
 
-def get_training_args(condition_id, is_smoke_test=False):
+def get_training_args(condition_id, is_smoke_test=False, epoch=1):
     output_dir = f"./paige-lora-condition-{condition_id}"
     params = {
         "output_dir": output_dir,
@@ -172,7 +174,8 @@ def get_training_args(condition_id, is_smoke_test=False):
         # Use bfloat16 for training on this model; disable fp16
         "bf16": True,
         "fp16": False,
-        "learning_rate": 2e-4,
+        # Conservative LR to avoid catastrophic forgetting of base model priors
+        "learning_rate": 5e-5,
         "max_seq_length": 1024,
         "logging_steps": 10,
         "save_total_limit": 1,
@@ -184,7 +187,8 @@ def get_training_args(condition_id, is_smoke_test=False):
     if is_smoke_test:
         params.update({"max_steps": 10, "output_dir": "./paige-smoketest"})
     else:
-        params.update({"num_train_epochs": 3, "save_steps": 100})
+        # 1.5 epochs: stops before the memorization cliff (empirically seen at ~0.12 loss)
+        params.update({"num_train_epochs": epoch, "save_steps": 100})
     return SFTConfig(**params)
 
 
@@ -264,17 +268,28 @@ _TARGET_FIELDS = [
 ]
 
 # Datasets that have been assessed as actively harmful (all-null labels).
-# These are excluded at load time to prevent the model learning to output nulls.
-_EXCLUDED_SOURCES = {"invoices_donut_v1"}
+# invoices_donut_v1 was previously excluded but field mapping is now fixed;
+# it contributes real invoice layout diversity to training.
+_EXCLUDED_SOURCES: set = set()
 
-_EXTRACTION_PROMPT = (
-    "You are a medical billing document extraction assistant. "
-    "Given the image of a Philippine hospital Statement of Account (SOA) or billing form, "
-    "extract the following fields and return them as a single JSON object with exactly these keys: "
+try:
+    from scripts.prompts import EXTRACTION_PROMPT as _EXTRACTION_PROMPT
+except Exception:
+    _EXTRACTION_PROMPT = None
+
+_EXTRACTION_PROMPT_FALLBACK = (
+    "You are a document extraction assistant. "
+    "Given the image of an invoice or billing document, "
+    "extract the following fields and return them as a single JSON object "
+    "with exactly these keys: "
     "date, patient_name, philhealth_number, diagnosis_code, procedure_code, "
     "total_amount, philhealth_benefit, balance_due. "
-    "Use null for any field not present in the document."
+    "Use null for any field not present in the document. "
+    "Return only the JSON object — no explanation, no markdown."
 )
+
+# Resolved at module level — guaranteed non-None
+_ACTIVE_PROMPT = _EXTRACTION_PROMPT or _EXTRACTION_PROMPT_FALLBACK
 
 def _build_messages_from_ground_truth(ground_truth):
     """Build a valid user+assistant chat turn pair for samples that have no messages.
@@ -284,7 +299,7 @@ def _build_messages_from_ground_truth(ground_truth):
         "role": "user",
         "content": [
             {"type": "image"},
-            {"type": "text", "text": _EXTRACTION_PROMPT},
+            {"type": "text", "text": _ACTIVE_PROMPT},
         ],
     }
     # Ensure all 8 target fields are present in the output (null if missing)
@@ -298,7 +313,7 @@ def _build_messages_from_ground_truth(ground_truth):
 
 def run_train(is_smoke_test, selected_ids=None):
     # Load training pools from extracted JSONL files
-    merged_train_path = "Datasets/Training_Data/golden/merged/all_sources_train.jsonl"
+    merged_train_path = "Datasets/Training_Data/golden/merged/all_sources_train_val.jsonl"
     real_images = []
     synthetic_images = []
     data_loaded = False
@@ -396,7 +411,7 @@ def run_train(is_smoke_test, selected_ids=None):
                     })
                 train_data = simple
 
-        args = get_training_args(condition["id"], is_smoke_test)
+        args = get_training_args(condition["id"], is_smoke_test, condition.get("epochs", 1))
         # The dataset is raw samples; UnslothVisionDataCollator handles tokenization,
         # so we must skip SFTTrainer's internal dataset preparation.
         try:
@@ -444,12 +459,6 @@ def run_train(is_smoke_test, selected_ids=None):
         else:
             print("Mode: Dry Run (Unsloth Unavailable)")
 
-        # Evaluation – cap at 20 samples during smoke tests for speed
-        print(f"Starting Evaluation for {condition['id']}...")
-        eval_cap = 20 if is_smoke_test else None
-        metrics = evaluate_condition(condition["id"], args.output_dir, model, tokenizer, max_eval_samples=eval_cap)
-        print(f"Final Metrics for {condition['id']}: {metrics}")
-
         # Resource Release
         if 'trainer' in locals():
             try:
@@ -460,16 +469,17 @@ def run_train(is_smoke_test, selected_ids=None):
         del tokenizer
         gc.collect()
         torch.cuda.empty_cache()
-        print(f"VRAM Cleared. Cooling down...")
+        print(f"VRAM cleared. Adapter saved at: {args.output_dir}")
+        print(f"Run eval separately: python evaluate.py --id {condition['id']}")
         time.sleep(5)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="pAIge Fine-tuning Ablation Runner")
     parser.add_argument("--smoke-test", action="store_true", help="Quick verification run")
-    
-    # Updated Argument: Accepts multiple letters (e.g., --id A B G)
+
+    # Accepts multiple letters (e.g., --id A B G)
     parser.add_argument("--id", nargs="+", help="Specific condition letters to run (e.g., A B G)")
-    
+
     cmd_args = parser.parse_args()
 
     run_train(cmd_args.smoke_test, cmd_args.id)

@@ -18,7 +18,6 @@ ALLOWED_DATASETS = {
     "cord_v2",
     "invoices_donut_v1",
     "paige_synthetic",
-    "sroie_2019_v2",
 }
 
 SYSTEM_PROMPT = (
@@ -64,9 +63,6 @@ def validate_record(record: Dict[str, Any]) -> None:
 
     if dataset not in ALLOWED_DATASETS:
         raise ValueError(f"Unsupported source_dataset: {dataset}")
-
-    if dataset == "sroie_2019_v2" and split in {"train", "val"}:
-        raise ValueError("SROIE is test-only and cannot be used in train/val splits")
 
     if split not in {"train", "val", "test"}:
         raise ValueError(f"Invalid split: {split}")

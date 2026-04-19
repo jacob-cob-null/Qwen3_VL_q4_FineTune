@@ -22,3 +22,4 @@ unsloth_compiled_cache/
 *.pyd
 .env
 .pytest_cache/
+scratch
