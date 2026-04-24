@@ -110,9 +110,10 @@ def resolve_image_path(image_path):
 
 # --- CONFIGURATION ---
 CONDITIONS = [
-    {"id": "A", "size": 500,  "synth_ratio": 0.30, "seed": 42, "epochs": 1.5},
-    {"id": "E", "size": 2000, "synth_ratio": 0.30, "seed": 46, "epochs": 0.75},
-    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44, "epochs": 1},
+    {"id": "A", "size": 500,  "synth_ratio": 0.30, "seed": 42, "epochs": 1},
+    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44, "epochs": 1},  
+    {"id": "E", "size": 2000, "synth_ratio": 0.30, "seed": 46, "epochs": [1, 1.5, 2, 3]},
+    {"id": "clean_data", "size": 1200, "synth_ratio": 800/1200, "seed": 42, "epochs": [1.0, 1.5, 2.0, 2.5, 3.0]}
     # {"id": "B", "size": 500,  "synth_ratio": 0.40, "seed": 43, "epochs": 1},
     # {"id": "D", "size": 1000, "synth_ratio": 0.40, "seed": 45, "epochs": 1},
     # {"id": "F", "size": 2000, "synth_ratio": 0.40, "seed": 47, "epochs": 1},
@@ -155,12 +156,37 @@ def setup_model():
         finetune_language_layers=True,
         finetune_attention_modules=True,
         finetune_mlp_modules=True,
-        r=16, 
-        lora_alpha=32,
+        r=32, 
+        lora_alpha=64,
         lora_dropout=0,
         random_state=42,
     )
     return model, tokenizer
+
+from transformers import TrainerCallback
+class SaveEpochsCallback(TrainerCallback):
+    def __init__(self, target_epochs, output_dir, tokenizer=None):
+        self.target_epochs = sorted(target_epochs)
+        self.output_dir = output_dir
+        self.saved_epochs = set()
+        self.tokenizer = tokenizer
+
+    def on_step_end(self, args, state, control, **kwargs):
+        current_epoch = state.epoch
+        if current_epoch is None: return
+
+        for t_epoch in self.target_epochs:
+            if t_epoch not in self.saved_epochs and current_epoch >= t_epoch:
+                save_path = f"{self.output_dir}-epoch-{t_epoch}"
+                if "model" in kwargs:
+                    kwargs["model"].save_pretrained(save_path)
+                
+                tok = kwargs.get("processing_class", kwargs.get("tokenizer", self.tokenizer))
+                if tok is not None:
+                    tok.save_pretrained(save_path)
+                
+                print(f"\n[Callback] Reached epoch {t_epoch} at step {state.global_step}. Saved adapter to: {save_path}\n")
+                self.saved_epochs.add(t_epoch)
 
 def get_training_args(condition_id, is_smoke_test=False, epoch=1):
     output_dir = f"./paige-lora-condition-{condition_id}"
@@ -169,6 +195,7 @@ def get_training_args(condition_id, is_smoke_test=False, epoch=1):
         "per_device_train_batch_size": 1 if is_smoke_test else 2,
         "gradient_accumulation_steps": 8,
         "gradient_checkpointing": True,
+        "max_grad_norm": 1.0,
         # Use a transformers/trl-recognized optimizer name
         "optim": "adamw_torch",
         # Use bfloat16 for training on this model; disable fp16
@@ -176,7 +203,7 @@ def get_training_args(condition_id, is_smoke_test=False, epoch=1):
         "fp16": False,
         # Conservative LR to avoid catastrophic forgetting of base model priors
         "learning_rate": 5e-5,
-        "max_seq_length": 1024,
+        "max_seq_length": 2048,
         "logging_steps": 10,
         "save_total_limit": 1,
         "dataloader_num_workers": 0,
@@ -188,7 +215,7 @@ def get_training_args(condition_id, is_smoke_test=False, epoch=1):
         params.update({"max_steps": 10, "output_dir": "./paige-smoketest"})
     else:
         # 1.5 epochs: stops before the memorization cliff (empirically seen at ~0.12 loss)
-        params.update({"num_train_epochs": epoch, "save_steps": 100})
+        params.update({"num_train_epochs": epoch, "save_strategy": "no"})
     return SFTConfig(**params)
 
 
@@ -202,8 +229,9 @@ class RawSampleDataset:
       - 'images':   list containing one PIL.Image (or None / empty list)
     """
 
-    def __init__(self, samples):
+    def __init__(self, samples, max_image_size=None):
         self.samples = samples
+        self.max_image_size = max_image_size
 
     def __len__(self):
         return len(self.samples)
@@ -243,7 +271,24 @@ class RawSampleDataset:
         if image_path and os.path.exists(image_path):
             try:
                 img = Image.open(image_path).convert("RGB")
-                images = [img]
+                
+                # Standardize canvas: letterbox to uniform sizes to lock mRoPE patch counts
+                # target_size limits token volume while enforcing deterministic grid shape
+                target_size = (1024, 1024)
+                pad_color = (245, 245, 245)
+                
+                # Resize to fit within target bounds (preserves aspect natively)
+                img.thumbnail(target_size, Image.Resampling.LANCZOS)
+                
+                # Create uniform canvas
+                canvas = Image.new('RGB', target_size, pad_color)
+                
+                # Paste resized image into center
+                offset = ((target_size[0] - img.width) // 2,
+                          (target_size[1] - img.height) // 2)
+                canvas.paste(img, offset)
+                
+                images = [canvas]
                 # Add image placeholder to the first user turn if missing
                 for msg in messages:
                     if msg.get("role") == "user":
@@ -270,7 +315,7 @@ _TARGET_FIELDS = [
 # Datasets that have been assessed as actively harmful (all-null labels).
 # invoices_donut_v1 was previously excluded but field mapping is now fixed;
 # it contributes real invoice layout diversity to training.
-_EXCLUDED_SOURCES: set = set()
+_EXCLUDED_SOURCES: set = {"cord_v2"}
 
 try:
     from scripts.prompts import EXTRACTION_PROMPT as _EXTRACTION_PROMPT
@@ -367,7 +412,7 @@ def run_train(is_smoke_test, selected_ids=None):
     elif selected_ids:
         # Normalize to uppercase and filter
         targets = [id.upper() for id in selected_ids]
-        run_conditions = [c for c in CONDITIONS if c["id"] in targets]
+        run_conditions = [c for c in CONDITIONS if c["id"].upper() in targets]
 
         if not run_conditions:
             print(f"Error: No valid conditions found in {targets}")
@@ -411,7 +456,13 @@ def run_train(is_smoke_test, selected_ids=None):
                     })
                 train_data = simple
 
-        args = get_training_args(condition["id"], is_smoke_test, condition.get("epochs", 1))
+        raw_epochs = condition.get("epochs", [1])
+        if type(raw_epochs) in (int, float):
+            target_epochs = [raw_epochs]
+        else:
+            target_epochs = list(raw_epochs)
+
+        args = get_training_args(condition["id"], is_smoke_test, max(target_epochs))
         # The dataset is raw samples; UnslothVisionDataCollator handles tokenization,
         # so we must skip SFTTrainer's internal dataset preparation.
         try:
@@ -422,8 +473,10 @@ def run_train(is_smoke_test, selected_ids=None):
         
         if UNSLOTH_AVAILABLE:
             # Build the raw-sample dataset – tokenization is deferred to the collator
-            raw_train = RawSampleDataset(train_data)
+            raw_train = RawSampleDataset(train_data, max_image_size=896)
             data_collator = UnslothVisionDataCollator(model, tokenizer)
+            
+            callbacks = [SaveEpochsCallback(target_epochs, args.output_dir, tokenizer=tokenizer)]
 
             if is_smoke_test and data_loaded:
                 print("Smoke test with real data: running a short training run")
@@ -434,6 +487,7 @@ def run_train(is_smoke_test, selected_ids=None):
                     data_collator=data_collator,
                     args=args,
                     train_dataset=raw_train,
+                    callbacks=callbacks
                 )
                 trainer.train()
                 model.save_pretrained(args.output_dir)
@@ -451,6 +505,7 @@ def run_train(is_smoke_test, selected_ids=None):
                     data_collator=data_collator,
                     args=args,
                     train_dataset=raw_train,
+                    callbacks=callbacks
                 )
                 trainer.train()
                 model.save_pretrained(args.output_dir)

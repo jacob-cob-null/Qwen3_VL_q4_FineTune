@@ -45,30 +45,88 @@ import re as _re
 _AMOUNT_FIELDS = {"total_amount", "philhealth_benefit", "balance_due"}
 _DATE_FIELDS   = {"date"}
 
-# Date formats in rough frequency order for Philippine medical/invoice docs
+# Text fields where CER adds partial-credit signal (amounts/dates use fuzzy numeric match instead)
+_TEXT_FIELDS = set()
+
+# Tier groupings for the IEEE success-matrix presentation
+_FIELD_TIERS = {
+    "temporal":  ["date"],
+    "financial": ["total_amount", "balance_due"],
+    "clinical":  [],
+}
+
+
+def _levenshtein(a, b):
+    """Pure-Python Levenshtein edit distance — no external dependencies."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb)))
+        prev = curr
+    return prev[len(b)]
+
+
+def _cer(pred_val, gt_val):
+    """
+    Character Error Rate for one field pair.
+    CER = levenshtein(pred, gt) / len(gt), clamped to [0, 1].
+    Both strings are normalised (lowercase, stripped) before comparison.
+    Returns None when gt is null/empty — no signal to measure against.
+    """
+    if not _has_value(gt_val):
+        return None
+    gt_str   = normalize(str(gt_val)) or ""
+    pred_str = normalize(str(pred_val)) if _has_value(pred_val) else ""
+    if not gt_str:
+        return None
+    return round(min(1.0, _levenshtein(pred_str, gt_str) / len(gt_str)), 4)
+
+# Date formats in rough frequency order for Philippine medical/invoice docs.
+# Covers SROIE ("29 JUN 18", "11-APR-2018", "03 JUN 18"), Donut (MM/DD/YYYY),
+# and ISO output from the model (YYYY-MM-DD already canonical).
 _DATE_FORMATS = [
+    # ISO (model output)
+    "%Y-%m-%d",
+    # DD/MM/YYYY and MM/DD/YYYY variants
     "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d",
-    "%d-%m-%Y", "%m-%d-%Y", "%Y-%m-%d",
-    "%d.%m.%Y", "%m.%d.%Y",
     "%d/%m/%y", "%m/%d/%y",
+    # Dash-separated
+    "%d-%m-%Y", "%m-%d-%Y",
     "%d-%m-%y", "%m-%d-%y",
-    "%d %b %Y", "%d %B %Y",
-    "%b %d %Y", "%B %d, %Y",
-    "%d %b %y", "%b %d %y",
+    # Dot-separated
+    "%d.%m.%Y", "%m.%d.%Y",
+    # Space-separated with abbreviated month name ("29 JUN 18", "03 JUN 18")
+    "%d %b %Y", "%d %b %y",
+    "%d %B %Y",
+    # Abbreviated month with dash ("11-APR-2018", "27-MAR-2018")
+    "%d-%b-%Y", "%d-%b-%y",
+    # Month-first with name
+    "%b %d %Y", "%b %d, %Y",
+    "%B %d, %Y",
 ]
 
 def _normalize_date(s):
     """Parse a date string to canonical YYYY-MM-DD. Falls back to stripped lowercase."""
     from datetime import datetime
     s = s.strip()
+    # Try each format; .upper() so 'jun' and 'JUN' both work with %b
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(s.upper(), fmt.replace("%b", "%b").upper()).strftime("%Y-%m-%d")
+            return datetime.strptime(s.upper(), fmt.upper()).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return s.lower()
 
 def _strip_currency(s):
+    # Also strip 'RM' prefix used in Malaysian receipts (SROIE dataset)
+    s = _re.sub(r"^RM\s*", "", s.strip(), flags=_re.IGNORECASE)
     return _re.sub(r"[₱$€£¥\s,]", "", s).strip()
 
 def _try_parse_float(s):
@@ -127,23 +185,21 @@ def compute_metrics(results):
     """
     Compute precision / recall / F1 per field plus roll-up metrics.
 
-    Key design choices vs the naive implementation:
-    - null-vs-null pairs are SKIPPED — they carry no signal and would
-      inflate TP counts on datasets where most fields are absent.
-    - macro_f1 is averaged only over *active* fields (fields that have at
-      least one non-null GT value in the test set).  Always-null fields
-      (e.g. philhealth_number on CORD receipts) no longer dilute the macro.
-    - fuzzy_exact_match: a sample qualifies if every non-null GT field
-      matches within the field-aware tolerance above.
-    - strict exact_match is retained unchanged for backward compatibility.
+    Key design choices:
+    - null-vs-null pairs SKIPPED — no signal, avoids TP inflation.
+    - macro_f1 averaged only over *active* fields (≥1 non-null GT value).
+    - fuzzy_exact_match: every non-null GT field matches within field-aware tolerance.
+    - strict exact_match retained for backward compatibility.
+    - CER (Character Error Rate) added per text field for partial-credit signal.
+    - tier_summary groups fields into temporal / financial / clinical buckets.
     """
     fields = [
-        "date", "patient_name", "philhealth_number",
-        "diagnosis_code", "procedure_code",
-        "total_amount", "philhealth_benefit",
-        "balance_due",
+        "date", "total_amount", "balance_due",
     ]
     scores = {f: {"tp": 0, "fp": 0, "fn": 0} for f in fields}
+    # CER accumulators: sum of CER values and count of non-null GT pairs
+    cer_sum   = {f: 0.0 for f in _TEXT_FIELDS}
+    cer_count = {f: 0   for f in _TEXT_FIELDS}
     exact       = 0
     fuzzy_exact = 0
 
@@ -151,23 +207,23 @@ def compute_metrics(results):
         pred = r["prediction"]
         gt   = r["ground_truth"]
 
-        # ── strict exact match (unchanged) ──────────────────────────────
+        # ── strict exact match ──────────────────────────────────────────
         if pred == gt:
             exact += 1
 
-        # ── fuzzy exact: every non-null GT field matches within tolerance ─
+        # ── fuzzy exact: every non-null GT field within tolerance ────────
         gt_active = [f for f in fields if _has_value(gt.get(f))]
         if gt_active and all(fields_match(f, pred.get(f), gt.get(f)) for f in gt_active):
             fuzzy_exact += 1
 
-        # ── per-field scoring ────────────────────────────────────────────
+        # ── per-field scoring + CER ──────────────────────────────────────
         for field in fields:
             pv, gv = pred.get(field), gt.get(field)
             has_pred = _has_value(pv)
             has_gt   = _has_value(gv)
 
             if not has_pred and not has_gt:
-                continue  # both null → no signal, skip
+                continue  # both null → no signal
 
             if has_pred and has_gt:
                 if fields_match(field, pv, gv):
@@ -176,9 +232,16 @@ def compute_metrics(results):
                     scores[field]["fp"] += 1
                     scores[field]["fn"] += 1
             elif has_pred:
-                scores[field]["fp"] += 1   # hallucinated a value
+                scores[field]["fp"] += 1   # hallucinated
             else:
-                scores[field]["fn"] += 1   # missed a value
+                scores[field]["fn"] += 1   # missed
+
+            # CER for text fields (amounts/dates use fuzzy numeric match)
+            if field in _TEXT_FIELDS:
+                cer_val = _cer(pv, gv)
+                if cer_val is not None:
+                    cer_sum[field]   += cer_val
+                    cer_count[field] += 1
 
     n = len(results)
     per_field = {}
@@ -186,63 +249,133 @@ def compute_metrics(results):
         p  = c["tp"] / (c["tp"] + c["fp"]) if c["tp"] + c["fp"] else 0.0
         rc = c["tp"] / (c["tp"] + c["fn"]) if c["tp"] + c["fn"] else 0.0
         f1 = 2 * p * rc / (p + rc)         if p + rc          else 0.0
-        per_field[field] = {
+        entry = {
             "precision": round(p,  4),
             "recall":    round(rc, 4),
             "f1":        round(f1, 4),
             "tp": c["tp"], "fp": c["fp"], "fn": c["fn"],
         }
+        # Attach mean CER for text fields
+        if field in _TEXT_FIELDS:
+            cnt = cer_count[field]
+            entry["mean_cer"] = round(cer_sum[field] / cnt, 4) if cnt else None
+        per_field[field] = entry
 
-    # Average only over fields that had at least one non-null GT value
+    # Macro F1 — active fields only
     active = [f for f in fields if scores[f]["tp"] + scores[f]["fn"] > 0]
     macro_f1 = (
         sum(per_field[f]["f1"] for f in active) / len(active)
         if active else 0.0
     )
 
+    # ── Tier summary (IEEE success-matrix format) ────────────────────────
+    tier_summary = {}
+    for tier, tier_fields in _FIELD_TIERS.items():
+        tier_active = [f for f in tier_fields if f in active]
+        if tier_active:
+            tier_f1  = sum(per_field[f]["f1"]  for f in tier_active) / len(tier_active)
+            tier_prec = sum(per_field[f]["precision"] for f in tier_active) / len(tier_active)
+            tier_rec  = sum(per_field[f]["recall"]    for f in tier_active) / len(tier_active)
+            # Mean CER for text-field tiers
+            tier_text = [f for f in tier_active if f in _TEXT_FIELDS]
+            mean_cer_vals = [
+                per_field[f]["mean_cer"] for f in tier_text
+                if per_field[f].get("mean_cer") is not None
+            ]
+            tier_summary[tier] = {
+                "active_fields":  tier_active,
+                "macro_f1":       round(tier_f1,  4),
+                "macro_precision": round(tier_prec, 4),
+                "macro_recall":   round(tier_rec,  4),
+                "mean_cer":       round(sum(mean_cer_vals) / len(mean_cer_vals), 4)
+                                  if mean_cer_vals else None,
+            }
+        else:
+            tier_summary[tier] = {
+                "active_fields": [],
+                "macro_f1": None,
+                "macro_precision": None,
+                "macro_recall": None,
+                "mean_cer": None,
+                "note": "No GT coverage in this test set for this tier",
+            }
+
     return {
         "exact_match":       round(exact       / n, 4) if n else 0.0,
         "fuzzy_exact_match": round(fuzzy_exact / n, 4) if n else 0.0,
         "macro_f1":          round(macro_f1,    4),
-        "active_fields":     active,   # which fields drove the macro_f1
+        "active_fields":     active,
         "per_field":         per_field,
+        "tier_summary":      tier_summary,
     }
 
 
 def safe_parse_json(text):
-    """Extract and parse the first JSON object from a model output string."""
+    """
+    Extract and parse the first JSON object from a model output string.
+
+    Handles three cases:
+      1. Clean JSON  → standard parse.
+      2. JSON embedded in surrounding text → regex-extracted then parsed.
+      3. Truncated JSON (generation runaway/cutoff) → key-value salvage via
+         regex so we don't lose all correctly-predicted fields in a sample.
+    """
     if not text:
         return {}
-    # Direct parse first
+
+    # ── 1. Direct parse ─────────────────────────────────────────────────
     try:
         return json.loads(text.strip())
     except Exception:
         pass
-    # Try to extract a JSON object embedded in surrounding text
+
+    # ── 2. Embedded JSON object ──────────────────────────────────────────
     match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())
         except Exception:
             pass
+
+    # ── 3. Truncated JSON — salvage completed key-value pairs ────────────
+    # Pattern: "key": "value" or "key": null (already-closed string values only)
+    salvaged = {}
+    # Match completed string values: "key": "value"
+    for m in re.finditer(r'"(\w+)"\s*:\s*"([^"]*?)"', text):
+        salvaged[m.group(1)] = m.group(2)
+    # Match null values: "key": null
+    for m in re.finditer(r'"(\w+)"\s*:\s*null', text):
+        if m.group(1) not in salvaged:  # don't overwrite a real value
+            salvaged[m.group(1)] = None
+    # If we recovered at least one key, return the salvaged dict
+    if salvaged:
+        return salvaged
+
     return {}
 
 def load_test_set(max_samples=None):
-    """Load the merged evaluation test set (cord_v2 + invoices_donut_v1)."""
-    # Primary: merged test JSONL built by organize_golden_jsonl.py
-    test_file_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "Datasets", "Training_Data", "golden", "merged", "all_sources_test.jsonl"
-    )
-    if not os.path.exists(test_file_path):
-        # Fallback: old SROIE location (graceful degradation)
-        test_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "Datasets", "Testing_Data", "sroie_2019_v2", "canonical", "test.jsonl"
-        )
-    if not os.path.exists(test_file_path):
-        print(f"Warning: test set not found at {test_file_path}. Returning empty eval list.")
+    """
+    Load the evaluation test set.
+
+    Priority order:
+      1. mixed_test_226.jsonl  — canonical 3-source balanced set
+                                  (100 CORD v2 + 26 Donut + 100 SROIE, seed 42)
+      2. sroie_2019_v2 standalone canonical  — all images confirmed on disk
+      3. all_sources_test.jsonl (merged)     — legacy fallback
+    """
+    _base = os.path.dirname(os.path.abspath(__file__))
+    # Prefer an explicit eval manifest in workspace root (eval_tiered_v1.jsonl)
+    candidates = [
+        os.path.join(_base, "eval_tiered_v1.jsonl"),
+        os.path.join(_base, "Datasets", "Testing_Data", "mixed_test_226.jsonl"),
+        os.path.join(_base, "Datasets", "Testing_Data", "sroie_2019_v2", "canonical", "test.jsonl"),
+        os.path.join(_base, "Datasets", "Training_Data", "golden", "merged", "all_sources_test.jsonl"),
+    ]
+    test_file_path = next((p for p in candidates if os.path.exists(p)), None)
+    if test_file_path is None:
+        print("Warning: no test set found. Returning empty eval list.")
         return []
+    print(f"  Test set: {os.path.relpath(test_file_path, _base)}")
     samples = []
     with open(test_file_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -279,8 +412,43 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
     if isinstance(user_content, list):
         # Rebuild content: keep image tokens, replace all text items with unified prompt
         new_content = [c for c in user_content if isinstance(c, dict) and c.get("type") == "image"]
+        # Ensure the canonical extraction prompt is present as the text item
         new_content.append({"type": "text", "text": _EXTRACTION_PROMPT})
         user_content = new_content
+
+    image = None
+    image_path = resolve_image_path(sample.get("image_path", ""))
+    if image_path and os.path.exists(image_path):
+        try:
+            image = PILImage.open(image_path).convert("RGB")
+
+            # Match training preprocessing: letterbox onto uniform canvas
+            target_size = (768, 1024)
+            pad_color = (245, 245, 245)
+
+            # Resize to fit within target bounds while preserving aspect ratio
+            try:
+                image.thumbnail(target_size, PILImage.Resampling.LANCZOS)
+            except Exception:
+                image.thumbnail(target_size, PILImage.LANCZOS)
+
+            # Create uniform canvas and paste centered
+            canvas = PILImage.new('RGB', target_size, pad_color)
+            offset = ((target_size[0] - image.width) // 2,
+                      (target_size[1] - image.height) // 2)
+            canvas.paste(image, offset)
+            image = canvas
+
+            # If the user content lacked an explicit image token, insert one
+            if isinstance(user_content, list):
+                has_image_item = any(isinstance(c, dict) and c.get("type") == "image" for c in user_content)
+                if not has_image_item:
+                    user_content = [{"type": "image"}] + user_content
+
+        except Exception as e:
+            print(f"Warning: Failed to load eval image {image_path}: {e}")
+
+    # Build the prompt messages after we may have modified user_content above
     prompt_messages = [{"role": "user", "content": user_content}]
 
     text_prompt = tokenizer.apply_chat_template(
@@ -288,21 +456,6 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
         tokenize=False,
         add_generation_prompt=True,
     )
-
-    image = None
-    image_path = resolve_image_path(sample.get("image_path", ""))
-    if image_path and os.path.exists(image_path):
-        try:
-            image = PILImage.open(image_path).convert("RGB")
-            if max_image_size is not None:
-                w, h = image.size
-                longest = max(w, h)
-                if longest > max_image_size:
-                    scale = max_image_size / longest
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    image = image.resize((new_w, new_h), PILImage.LANCZOS)
-        except Exception as e:
-            print(f"Warning: Failed to load eval image {image_path}: {e}")
 
     return text_prompt, image
 
@@ -436,6 +589,17 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     print(f"  Loading test set{'(capped at ' + str(max_eval_samples) + ' samples)' if max_eval_samples else ''}...")
 
     sroie_test = load_test_set(max_samples=max_eval_samples)
+    # Allow CLI override for test manifest if provided
+    if args.test_manifest:
+        tm = os.path.abspath(args.test_manifest)
+        if os.path.exists(tm):
+            print(f"  Overriding test set with {tm}")
+            with open(tm, 'r', encoding='utf-8') as f:
+                sroie_test = [json.loads(l) for l in f if l.strip()]
+                if max_eval_samples:
+                    sroie_test = sroie_test[:max_eval_samples]
+        else:
+            print(f"  Warning: --test-manifest {tm} not found; using discovered test set.")
     if not sroie_test:
         print("  No test samples found. Returning zero metrics.")
         return {"exact_match": 0.0, "macro_f1": 0.0, "per_field": {}}
@@ -453,14 +617,47 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
         pred_dict = safe_parse_json(raw_pred)
         gt_dict   = sample.get("ground_truth", {})
         results.append({
-            "prediction":   pred_dict,
-            "ground_truth": gt_dict,
+            "prediction":    pred_dict,
+            "ground_truth":  gt_dict,
             "raw_prediction": raw_pred,
+            "source_dataset": sample.get("source_dataset", "unknown"),
         })
 
     print(f"  Inference complete ({len(results)} samples).")
 
     metrics = compute_metrics(results)
+
+    # ── Per-source breakdown ─────────────────────────────────────────────
+    sources = sorted({r["source_dataset"] for r in results})
+    per_source = {}
+    for src in sources:
+        subset = [r for r in results if r["source_dataset"] == src]
+        per_source[src] = {
+            "num_samples": len(subset),
+            "metrics":     compute_metrics(subset),
+        }
+        print(f"  [{src}] n={len(subset)}  "
+              f"macro_f1={per_source[src]['metrics']['macro_f1']:.4f}  "
+              f"fuzzy_em={per_source[src]['metrics']['fuzzy_exact_match']:.4f}")
+
+    # ── Domain grouping (Tiered reporting) ───────────────────────────────
+    DOMAIN_GROUPS = {
+        "Tier A (Invoice-Style)": ["sroie_2019_v2", "invoices_donut_v1"],
+        "Tier B (Edge Cases - CORD)": ["cord_v2"],
+    }
+    per_domain = {}
+    for dname, d_sources in DOMAIN_GROUPS.items():
+        subset = [r for r in results if r["source_dataset"] in d_sources]
+        if subset:
+            per_domain[dname] = {
+                "num_samples": len(subset),
+                "metrics": compute_metrics(subset),
+                "sources": sorted(set(r["source_dataset"] for r in subset)),
+            }
+            m = per_domain[dname]["metrics"]
+            print(f"  [{dname}] n={len(subset)}  macro_f1={m['macro_f1']:.4f}  fuzzy_em={m['fuzzy_exact_match']:.4f}")
+        else:
+            per_domain[dname] = {"num_samples": 0, "metrics": None, "sources": []}
 
     out_path = f"eval_condition_{condition_id}.json"
     with open(out_path, "w") as f:
@@ -469,8 +666,15 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
             "adapter_path": adapter_path,
             "num_samples":  len(results),
             "metrics":      metrics,
+            "per_source":   per_source,
+            "per_domain":   per_domain,
             "predictions":  [
-                {"gt": r["ground_truth"], "pred": r["prediction"], "raw": r["raw_prediction"]}
+                {
+                    "source": r["source_dataset"],
+                    "gt":     r["ground_truth"],
+                    "pred":   r["prediction"],
+                    "raw":    r["raw_prediction"],
+                }
                 for r in results
             ],
         }, f, indent=2)
@@ -533,20 +737,21 @@ if __name__ == "__main__":
 
     # Map condition IDs to their adapter directories (mirrors train.py naming)
     CONDITION_DIRS = {
-        "A": "./paige-lora-condition-A",
-        "B": "./paige-lora-condition-B",
-        "C": "./paige-lora-condition-C",
-        "D": "./paige-lora-condition-D",
-        "E": "./paige-lora-condition-E",
-        "F": "./paige-lora-condition-F",
-        "G": "./paige-lora-condition-G",
-        "smoketest": "./paige-smoketest",
+        "A": "paige-lora-condition-A",
+        "B": "paige-lora-condition-B",
+        "C": "paige-lora-condition-C",
+        "D": "paige-lora-condition-D",
+        "E": "paige-lora-condition-E",
+        "F": "paige-lora-condition-F",
+        "G": "paige-lora-condition-G",
+        "clean_data": "paige-lora-condition-clean_data",
+        "smoketest": "paige-smoketest",
     }
 
     parser = argparse.ArgumentParser(description="pAIge standalone evaluation")
     parser.add_argument(
         "--id", nargs="+", required=True,
-        help="Condition letter(s) to evaluate, e.g. --id A B G (or 'smoketest')",
+        help="Condition letter(s) to evaluate, e.g. --id A B G (or 'smoketest' or 'ALL')",
     )
     parser.add_argument(
         "--max-samples", type=int, default=None,
@@ -566,38 +771,91 @@ if __name__ == "__main__":
         "--adapter-path", type=str, default=None,
         help="Override the adapter directory (single condition only)",
     )
+    parser.add_argument(
+        "--test-manifest", type=str, default=None,
+        help="Path to a test manifest (.jsonl). If provided, it overrides automatic test set discovery.",
+    )
+    parser.add_argument(
+        "--results-dir", type=str, default=".",
+        help="Root directory containing paige-lora-condition-* folders. "
+             "E.g. --results-dir results/1_epoch or --results-dir results/scale_epoch",
+    )
     args = parser.parse_args()
+
+    results_dir = os.path.abspath(args.results_dir)
+    # Derive a short label from the last path component for output file naming
+    # e.g.  results/1_epoch  -> '1_epoch'   |   '.'  -> 'default'
+    _rdir_label = os.path.basename(results_dir) or "default"
 
     # Propagate settings to evaluate_condition via function attributes
     evaluate_condition._batch_size = args.batch_size
     evaluate_condition._max_image_size = args.max_image_size
 
-    targets = [i.upper() if i.lower() != "smoketest" else "smoketest" for i in args.id]
+    # Keep raw ids but compare case-insensitively against known condition names
+    targets = args.id
+    # Build a normalized map of CONDITION_DIRS for case-insensitive lookup
+    cond_map = {k.lower(): v for k, v in CONDITION_DIRS.items()}
 
-    for cond_id in targets:
-        if args.adapter_path:
-            adapter_path = args.adapter_path
-        elif cond_id in CONDITION_DIRS:
-            adapter_path = CONDITION_DIRS[cond_id]
-        else:
-            print(f"Unknown condition '{cond_id}'. Valid options: {list(CONDITION_DIRS.keys())}")
-            continue
+    expanded_targets = []
+    if any(t.lower() == "all" for t in targets):
+        if os.path.exists(results_dir):
+            for item in sorted(os.listdir(results_dir)):
+                full_path = os.path.join(results_dir, item)
+                if os.path.isdir(full_path):
+                    # Verify it has model/adapter config
+                    if os.path.exists(os.path.join(full_path, "adapter_config.json")) or os.path.exists(os.path.join(full_path, "config.json")):
+                        cond_id = item
+                        if cond_id.startswith("paige-lora-condition-"):
+                            cond_id = cond_id[len("paige-lora-condition-"):]
+                        expanded_targets.append((cond_id, full_path))
+        if not expanded_targets:
+            print(f"No adapters found in '{results_dir}'.")
+    else:
+        for cond_id in targets:
+            if args.adapter_path:
+                expanded_targets.append((cond_id, args.adapter_path))
+                continue
+            cond_key = cond_id.lower()
+            if cond_key in cond_map:
+                base_name = cond_map[cond_key]
+                base_path = os.path.join(results_dir, base_name)
+                found = False
+                if os.path.isdir(base_path):
+                    expanded_targets.append((cond_id, base_path))
+                    found = True
 
+                # Autodetect epoch steps if any
+                if os.path.exists(results_dir):
+                    for item in sorted(os.listdir(results_dir)):
+                        if item.startswith(base_name + "-epoch-") and os.path.isdir(os.path.join(results_dir, item)):
+                            suffix = item[len(base_name):]  # e.g., '-epoch-1.5'
+                            expanded_targets.append((cond_id + suffix, os.path.join(results_dir, item)))
+                            found = True
+
+                if not found:
+                    print(f"Adapter not found for condition '{cond_id}' in '{results_dir}'.")
+            else:
+                print(f"Unknown condition '{cond_id}'. Valid options: {list(CONDITION_DIRS.keys())} or 'ALL'")
+
+    for cond_id, adapter_path in expanded_targets:
         if not os.path.isdir(adapter_path):
-            print(f"Adapter not found at '{adapter_path}'. Train condition {cond_id} first.")
+            print(f"Adapter not found at '{adapter_path}'. Skipping.")
             continue
 
-        print(f"\n{'='*60}\nEVALUATING Condition {cond_id}\n{'='*60}")
+        # Label used in output filename: e.g. '1_epoch_A'  or  'scale_epoch_C'
+        output_label = f"{_rdir_label}_{cond_id}" if _rdir_label != "default" else cond_id
+
+        print(f"\n{'='*60}\nEVALUATING [{_rdir_label}] Condition {cond_id}\n{'='*60}")
         model, tokenizer = _load_model_for_eval(adapter_path)
 
         metrics = evaluate_condition(
-            condition_id=cond_id,
+            condition_id=output_label,
             adapter_path=adapter_path,
             model=model,
             tokenizer=tokenizer,
             max_eval_samples=args.max_samples,
         )
-        print(f"Metrics for condition {cond_id}: {metrics}")
+        print(f"Metrics for [{_rdir_label}] condition {cond_id}: {metrics}")
 
         # Release VRAM before evaluating the next condition
         del model, tokenizer
