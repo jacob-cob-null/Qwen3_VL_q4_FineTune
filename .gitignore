@@ -23,3 +23,8 @@ unsloth_compiled_cache/
 .env
 .pytest_cache/
 scratch
+prev_run
+Eval_result
+tests
+eval_tiered_v1.jsonl
+eval_tiered_v1.report.json

@@ -364,7 +364,9 @@ def load_test_set(max_samples=None):
       3. all_sources_test.jsonl (merged)     — legacy fallback
     """
     _base = os.path.dirname(os.path.abspath(__file__))
+    # Prefer an explicit eval manifest in workspace root (eval_tiered_v1.jsonl)
     candidates = [
+        os.path.join(_base, "eval_tiered_v1.jsonl"),
         os.path.join(_base, "Datasets", "Testing_Data", "mixed_test_226.jsonl"),
         os.path.join(_base, "Datasets", "Testing_Data", "sroie_2019_v2", "canonical", "test.jsonl"),
         os.path.join(_base, "Datasets", "Training_Data", "golden", "merged", "all_sources_test.jsonl"),
@@ -410,8 +412,43 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
     if isinstance(user_content, list):
         # Rebuild content: keep image tokens, replace all text items with unified prompt
         new_content = [c for c in user_content if isinstance(c, dict) and c.get("type") == "image"]
+        # Ensure the canonical extraction prompt is present as the text item
         new_content.append({"type": "text", "text": _EXTRACTION_PROMPT})
         user_content = new_content
+
+    image = None
+    image_path = resolve_image_path(sample.get("image_path", ""))
+    if image_path and os.path.exists(image_path):
+        try:
+            image = PILImage.open(image_path).convert("RGB")
+
+            # Match training preprocessing: letterbox onto uniform canvas
+            target_size = (768, 1024)
+            pad_color = (245, 245, 245)
+
+            # Resize to fit within target bounds while preserving aspect ratio
+            try:
+                image.thumbnail(target_size, PILImage.Resampling.LANCZOS)
+            except Exception:
+                image.thumbnail(target_size, PILImage.LANCZOS)
+
+            # Create uniform canvas and paste centered
+            canvas = PILImage.new('RGB', target_size, pad_color)
+            offset = ((target_size[0] - image.width) // 2,
+                      (target_size[1] - image.height) // 2)
+            canvas.paste(image, offset)
+            image = canvas
+
+            # If the user content lacked an explicit image token, insert one
+            if isinstance(user_content, list):
+                has_image_item = any(isinstance(c, dict) and c.get("type") == "image" for c in user_content)
+                if not has_image_item:
+                    user_content = [{"type": "image"}] + user_content
+
+        except Exception as e:
+            print(f"Warning: Failed to load eval image {image_path}: {e}")
+
+    # Build the prompt messages after we may have modified user_content above
     prompt_messages = [{"role": "user", "content": user_content}]
 
     text_prompt = tokenizer.apply_chat_template(
@@ -419,21 +456,6 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
         tokenize=False,
         add_generation_prompt=True,
     )
-
-    image = None
-    image_path = resolve_image_path(sample.get("image_path", ""))
-    if image_path and os.path.exists(image_path):
-        try:
-            image = PILImage.open(image_path).convert("RGB")
-            if max_image_size is not None:
-                w, h = image.size
-                longest = max(w, h)
-                if longest > max_image_size:
-                    scale = max_image_size / longest
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    image = image.resize((new_w, new_h), PILImage.LANCZOS)
-        except Exception as e:
-            print(f"Warning: Failed to load eval image {image_path}: {e}")
 
     return text_prompt, image
 
@@ -567,6 +589,17 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     print(f"  Loading test set{'(capped at ' + str(max_eval_samples) + ' samples)' if max_eval_samples else ''}...")
 
     sroie_test = load_test_set(max_samples=max_eval_samples)
+    # Allow CLI override for test manifest if provided
+    if args.test_manifest:
+        tm = os.path.abspath(args.test_manifest)
+        if os.path.exists(tm):
+            print(f"  Overriding test set with {tm}")
+            with open(tm, 'r', encoding='utf-8') as f:
+                sroie_test = [json.loads(l) for l in f if l.strip()]
+                if max_eval_samples:
+                    sroie_test = sroie_test[:max_eval_samples]
+        else:
+            print(f"  Warning: --test-manifest {tm} not found; using discovered test set.")
     if not sroie_test:
         print("  No test samples found. Returning zero metrics.")
         return {"exact_match": 0.0, "macro_f1": 0.0, "per_field": {}}
@@ -607,6 +640,25 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
               f"macro_f1={per_source[src]['metrics']['macro_f1']:.4f}  "
               f"fuzzy_em={per_source[src]['metrics']['fuzzy_exact_match']:.4f}")
 
+    # ── Domain grouping (Tiered reporting) ───────────────────────────────
+    DOMAIN_GROUPS = {
+        "Tier A (Invoice-Style)": ["sroie_2019_v2", "invoices_donut_v1"],
+        "Tier B (Edge Cases - CORD)": ["cord_v2"],
+    }
+    per_domain = {}
+    for dname, d_sources in DOMAIN_GROUPS.items():
+        subset = [r for r in results if r["source_dataset"] in d_sources]
+        if subset:
+            per_domain[dname] = {
+                "num_samples": len(subset),
+                "metrics": compute_metrics(subset),
+                "sources": sorted(set(r["source_dataset"] for r in subset)),
+            }
+            m = per_domain[dname]["metrics"]
+            print(f"  [{dname}] n={len(subset)}  macro_f1={m['macro_f1']:.4f}  fuzzy_em={m['fuzzy_exact_match']:.4f}")
+        else:
+            per_domain[dname] = {"num_samples": 0, "metrics": None, "sources": []}
+
     out_path = f"eval_condition_{condition_id}.json"
     with open(out_path, "w") as f:
         json.dump({
@@ -615,6 +667,7 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
             "num_samples":  len(results),
             "metrics":      metrics,
             "per_source":   per_source,
+            "per_domain":   per_domain,
             "predictions":  [
                 {
                     "source": r["source_dataset"],
@@ -691,6 +744,7 @@ if __name__ == "__main__":
         "E": "paige-lora-condition-E",
         "F": "paige-lora-condition-F",
         "G": "paige-lora-condition-G",
+        "clean_data": "paige-lora-condition-clean_data",
         "smoketest": "paige-smoketest",
     }
 
@@ -718,6 +772,10 @@ if __name__ == "__main__":
         help="Override the adapter directory (single condition only)",
     )
     parser.add_argument(
+        "--test-manifest", type=str, default=None,
+        help="Path to a test manifest (.jsonl). If provided, it overrides automatic test set discovery.",
+    )
+    parser.add_argument(
         "--results-dir", type=str, default=".",
         help="Root directory containing paige-lora-condition-* folders. "
              "E.g. --results-dir results/1_epoch or --results-dir results/scale_epoch",
@@ -733,10 +791,13 @@ if __name__ == "__main__":
     evaluate_condition._batch_size = args.batch_size
     evaluate_condition._max_image_size = args.max_image_size
 
-    targets = [i.upper() if i.lower() not in ["smoketest", "all"] else i.lower() for i in args.id]
+    # Keep raw ids but compare case-insensitively against known condition names
+    targets = args.id
+    # Build a normalized map of CONDITION_DIRS for case-insensitive lookup
+    cond_map = {k.lower(): v for k, v in CONDITION_DIRS.items()}
 
     expanded_targets = []
-    if "all" in targets:
+    if any(t.lower() == "all" for t in targets):
         if os.path.exists(results_dir):
             for item in sorted(os.listdir(results_dir)):
                 full_path = os.path.join(results_dir, item)
@@ -753,14 +814,16 @@ if __name__ == "__main__":
         for cond_id in targets:
             if args.adapter_path:
                 expanded_targets.append((cond_id, args.adapter_path))
-            elif cond_id in CONDITION_DIRS:
-                base_name = CONDITION_DIRS[cond_id]
+                continue
+            cond_key = cond_id.lower()
+            if cond_key in cond_map:
+                base_name = cond_map[cond_key]
                 base_path = os.path.join(results_dir, base_name)
                 found = False
                 if os.path.isdir(base_path):
                     expanded_targets.append((cond_id, base_path))
                     found = True
-                
+
                 # Autodetect epoch steps if any
                 if os.path.exists(results_dir):
                     for item in sorted(os.listdir(results_dir)):
@@ -768,7 +831,7 @@ if __name__ == "__main__":
                             suffix = item[len(base_name):]  # e.g., '-epoch-1.5'
                             expanded_targets.append((cond_id + suffix, os.path.join(results_dir, item)))
                             found = True
-                
+
                 if not found:
                     print(f"Adapter not found for condition '{cond_id}' in '{results_dir}'.")
             else:
