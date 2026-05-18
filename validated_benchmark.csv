@@ -1,0 +1,25 @@
+Metric,Zero-Shot,Logic E1.5,Composed 97:3
+Tier A: Macro F1,0.3311,0.9513,0.9380
+Tier A: Fuzzy EM,0.0000,0.8816,0.8421
+Tier A: date,0.9934,0.9934,0.9934
+Tier A: total_amount,0.0000,0.9333,0.8933
+Tier A: patient_name,0.0000,0.9272,0.9272
+Tier A: balance_due,0.0000,0.0000,0.0000
+Tier A: philhealth_number,0.0000,0.0000,0.0000
+Tier A: diagnosis_code,0.0000,0.0000,0.0000
+Tier A: procedure_code,0.0000,0.0000,0.0000
+Tier A: service_origin,0.0000,0.0000,0.0000
+Tier A: philhealth_benefit,0.0000,0.0000,0.0000
+Tier B: Macro F1 (Core Triad),0.8402,0.4757,0.7253
+Tier B: Fuzzy EM,0.4600,0.1800,0.4000
+Tier B: date,0.6667,0.1800,0.5200
+Tier B: total_amount,1.0000,0.8235,0.9247
+Tier B: patient_name,0.8539,0.4235,0.7312
+Tier B: balance_due (all-field),0.1000,0.0471,0.1935
+Tier B: philhealth_number (all-field),0.0000,0.0000,0.0000
+Tier B: diagnosis_code (all-field),0.0000,0.0000,0.0000
+Tier B: procedure_code (all-field),0.0000,0.2353,0.0000
+Tier B: service_origin (all-field),0.0000,0.0000,0.0000
+Tier B: philhealth_benefit (all-field),0.2456,0.0471,0.1290
+Anchor: SROIE Macro F1,0.9463,0.8497,0.8544
+Anchor: SROIE Fuzzy EM,0.8700,0.7200,0.7300

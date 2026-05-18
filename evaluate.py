@@ -9,9 +9,12 @@ try:
     if _train_dir not in sys.path:
         sys.path.insert(0, _train_dir)
     from train import resolve_image_path
+    from scripts.postprocess import postprocess
 except Exception:
     def resolve_image_path(p):
         return p or ""
+    def postprocess(p, g, s):
+        return p
 
 # Ensure multimodal messages contain image placeholders when images are present
 try:
@@ -54,6 +57,28 @@ _FIELD_TIERS = {
     "financial": ["total_amount", "balance_due"],
     "clinical":  [],
 }
+
+# ---------------------------------------------------------------------------
+# Context-Aware Pruning (Operational Gate — Tier B)
+# ---------------------------------------------------------------------------
+# Under strong visual noise (stress_level='high'), these fields are physically
+# unreadable (0% accuracy). They are delegated to the Rule Engine / Database.
+# The Core Triad is what the model is held to account for under heavy noise.
+CORE_FIELDS = ["date", "total_amount", "patient_name"]
+REDACTED_UNDER_NOISE = [
+    "diagnosis_code", "procedure_code", "philhealth_number",
+    "service_origin", "philhealth_benefit", "balance_due"
+]
+
+def _prune_to_core(record):
+    """Return a copy of a result record with GT and prediction pruned to CORE_FIELDS."""
+    def _filter(d):
+        return {k: v for k, v in (d or {}).items() if k in CORE_FIELDS}
+    return {
+        **record,
+        "prediction":   _filter(record.get("prediction")),
+        "ground_truth": _filter(record.get("ground_truth")),
+    }
 
 
 def _levenshtein(a, b):
@@ -195,6 +220,9 @@ def compute_metrics(results):
     """
     fields = [
         "date", "total_amount", "balance_due",
+        "patient_name", "philhealth_number",
+        "diagnosis_code", "procedure_code",
+        "service_origin", "philhealth_benefit",
     ]
     scores = {f: {"tp": 0, "fp": 0, "fn": 0} for f in fields}
     # CER accumulators: sum of CER values and count of non-null GT pairs
@@ -404,7 +432,9 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
     messages = sample.get("messages", [])
     user_messages = [m for m in messages if m.get("role") == "user"]
     if not user_messages:
-        return None, None
+        # For raw datasets (like paige_synthetic) that only provide ground_truth,
+        # synthesize the necessary user chat turn for inference.
+        user_messages = [{"role": "user", "content": [{"type": "text", "text": _EXTRACTION_PROMPT}]}]
 
     # Override the user-turn text with the canonical prompt to prevent
     # instruction drift (mismatches between training and evaluation prompts).
@@ -423,7 +453,7 @@ def _prepare_sample_prompt(tokenizer, sample, max_image_size=None):
             image = PILImage.open(image_path).convert("RGB")
 
             # Match training preprocessing: letterbox onto uniform canvas
-            target_size = (768, 1024)
+            target_size = (1024, 1024)  # must match train.py canvas exactly
             pad_color = (245, 245, 245)
 
             # Resize to fit within target bounds while preserving aspect ratio
@@ -558,9 +588,10 @@ def run_inference_batch(model, tokenizer, samples, batch_size=8, max_image_size=
     return all_decoded
 
 
-def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, max_eval_samples=None):
+def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None,
+                       max_eval_samples=None, test_manifest=None):
     """
-    Evaluate a trained model on the SROIE test set.
+    Evaluate a trained model on the SROIE / tiered test set.
 
     The model passed in is already LoRA-adapted and trained — we do NOT
     re-load or re-wrap the adapter here to avoid the double-PEFT-wrapping
@@ -573,6 +604,8 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
         model:             The trained PeftModel, still in memory from training.
         tokenizer:         The tokenizer used during training.
         max_eval_samples:  Cap the number of test samples (useful for smoke tests).
+        test_manifest:     Optional path to a .jsonl test manifest; overrides auto-
+                           discovery. Pass explicitly instead of relying on global args.
     """
     if model is None or tokenizer is None:
         print("Model or tokenizer not provided for evaluation. Skipping actual inference.")
@@ -589,9 +622,15 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     print(f"  Loading test set{'(capped at ' + str(max_eval_samples) + ' samples)' if max_eval_samples else ''}...")
 
     sroie_test = load_test_set(max_samples=max_eval_samples)
-    # Allow CLI override for test manifest if provided
-    if args.test_manifest:
-        tm = os.path.abspath(args.test_manifest)
+    # Allow explicit test manifest override (passed as parameter OR from CLI args)
+    _manifest_override = test_manifest
+    if _manifest_override is None:
+        # Fall back to CLI args only when running as __main__
+        _cli_args = globals().get("args", None)
+        if _cli_args is not None:
+            _manifest_override = getattr(_cli_args, "test_manifest", None)
+    if _manifest_override:
+        tm = os.path.abspath(_manifest_override)
         if os.path.exists(tm):
             print(f"  Overriding test set with {tm}")
             with open(tm, 'r', encoding='utf-8') as f:
@@ -613,17 +652,36 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     raw_preds = run_inference_batch(model, tokenizer, sroie_test, batch_size=batch_size, max_image_size=max_image_size)
 
     results = []
+    balance_due_imputed = 0
+    date_anchor_errors = 0
+
     for i, (raw_pred, sample) in enumerate(zip(raw_preds, sroie_test)):
         pred_dict = safe_parse_json(raw_pred)
         gt_dict   = sample.get("ground_truth", {})
+        md        = sample.get("metadata") or {}
+        source_dataset = sample.get("source_dataset", "unknown")
+
+        # Apply deterministic post-processing
+        pred_dict = postprocess(pred_dict, gt_dict, source_dataset)
+
+        if pred_dict.get("_balance_due_imputed"):
+            balance_due_imputed += 1
+        if pred_dict.get("_date_anchor_error"):
+            date_anchor_errors += 1
+
         results.append({
             "prediction":    pred_dict,
             "ground_truth":  gt_dict,
             "raw_prediction": raw_pred,
-            "source_dataset": sample.get("source_dataset", "unknown"),
+            "source_dataset": source_dataset,
+            # tier / stress metadata from eval_tiered_v1.jsonl (may be absent for legacy manifests)
+            "tier":         sample.get("tier"),
+            "stress_level": md.get("stress_level"),
         })
 
     print(f"  Inference complete ({len(results)} samples).")
+    if balance_due_imputed > 0 or date_anchor_errors > 0:
+        print(f"  Post-processing applied: {balance_due_imputed} balance_due imputed, {date_anchor_errors} date anchor errors flagged.")
 
     metrics = compute_metrics(results)
 
@@ -632,13 +690,48 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     per_source = {}
     for src in sources:
         subset = [r for r in results if r["source_dataset"] == src]
+        # Apply Context-Aware Pruning for high-stress specialized samples
+        is_specialized = all(r.get("stress_level") == "high" or r.get("tier") == "Specialized" for r in subset)
+        scored_subset = [_prune_to_core(r) for r in subset] if is_specialized else subset
         per_source[src] = {
             "num_samples": len(subset),
-            "metrics":     compute_metrics(subset),
+            "metrics":     compute_metrics(scored_subset),
+            "scoring_mode": "core_triad" if is_specialized else "full_schema",
         }
         print(f"  [{src}] n={len(subset)}  "
               f"macro_f1={per_source[src]['metrics']['macro_f1']:.4f}  "
               f"fuzzy_em={per_source[src]['metrics']['fuzzy_exact_match']:.4f}")
+
+    # ── Specialized tier: per-noise-level breakdown ──────────────────────
+    # Groups paige_synthetic results by stress_level ('low' / 'high') so
+    # the realistic vs strong-filter SNR comparison is visible without
+    # manual JSON parsing.  Only emitted when the manifest carries this field.
+    specialized_rows = [r for r in results if r.get("tier") == "Specialized"]
+    per_noise_level = {}
+    if specialized_rows:
+        stress_levels = sorted(set(r.get("stress_level") for r in specialized_rows
+                                   if r.get("stress_level")))
+        for sl in stress_levels:
+            subset = [r for r in specialized_rows if r.get("stress_level") == sl]
+            # Prune to Core Triad for high-stress samples (Tier B: Operational Gate)
+            scored = [_prune_to_core(r) for r in subset] if sl == "high" else subset
+            mode_label = "Core Triad" if sl == "high" else "Full Schema"
+            per_noise_level[sl] = {
+                "num_samples": len(subset),
+                "metrics":     compute_metrics(scored),
+                "scoring_mode": mode_label,
+            }
+            m = per_noise_level[sl]["metrics"]
+            print(f"  [Specialized / stress={sl} / {mode_label}] n={len(subset)}  "
+                  f"macro_f1={m['macro_f1']:.4f}  "
+                  f"fuzzy_em={m['fuzzy_exact_match']:.4f}")
+        # Also emit the unlabelled remainder (samples with no stress_level tag)
+        unlabelled = [r for r in specialized_rows if not r.get("stress_level")]
+        if unlabelled:
+            per_noise_level["unlabelled"] = {
+                "num_samples": len(unlabelled),
+                "metrics":     compute_metrics(unlabelled),
+            }
 
     # ── Domain grouping (Tiered reporting) ───────────────────────────────
     DOMAIN_GROUPS = {
@@ -662,18 +755,25 @@ def evaluate_condition(condition_id, adapter_path, model=None, tokenizer=None, m
     out_path = f"eval_condition_{condition_id}.json"
     with open(out_path, "w") as f:
         json.dump({
-            "condition_id": condition_id,
-            "adapter_path": adapter_path,
-            "num_samples":  len(results),
-            "metrics":      metrics,
-            "per_source":   per_source,
-            "per_domain":   per_domain,
+            "condition_id":    condition_id,
+            "adapter_path":    adapter_path,
+            "num_samples":     len(results),
+            "metrics":         metrics,
+            "per_source":      per_source,
+            "per_domain":      per_domain,
+            "per_noise_level": per_noise_level,  # Specialized tier grouped by stress_level
+            "postprocess_summary": {
+                "balance_due_imputed": balance_due_imputed,
+                "date_anchor_errors": date_anchor_errors,
+            },
             "predictions":  [
                 {
-                    "source": r["source_dataset"],
-                    "gt":     r["ground_truth"],
-                    "pred":   r["prediction"],
-                    "raw":    r["raw_prediction"],
+                    "source":       r["source_dataset"],
+                    "tier":         r.get("tier"),
+                    "stress_level": r.get("stress_level"),
+                    "gt":           r["ground_truth"],
+                    "pred":         r["prediction"],
+                    "raw":          r["raw_prediction"],
                 }
                 for r in results
             ],
@@ -745,6 +845,7 @@ if __name__ == "__main__":
         "F": "paige-lora-condition-F",
         "G": "paige-lora-condition-G",
         "clean_data": "paige-lora-condition-clean_data",
+        "noise_r16": "paige-lora-condition-noise_r16",
         "smoketest": "paige-smoketest",
     }
 
@@ -838,7 +939,8 @@ if __name__ == "__main__":
                 print(f"Unknown condition '{cond_id}'. Valid options: {list(CONDITION_DIRS.keys())} or 'ALL'")
 
     for cond_id, adapter_path in expanded_targets:
-        if not os.path.isdir(adapter_path):
+        # If it's not a local directory, only skip if it also doesn't look like a HF Hub ID
+        if not os.path.isdir(adapter_path) and "/" not in adapter_path:
             print(f"Adapter not found at '{adapter_path}'. Skipping.")
             continue
 
@@ -854,6 +956,7 @@ if __name__ == "__main__":
             model=model,
             tokenizer=tokenizer,
             max_eval_samples=args.max_samples,
+            test_manifest=getattr(args, "test_manifest", None),
         )
         print(f"Metrics for [{_rdir_label}] condition {cond_id}: {metrics}")
 

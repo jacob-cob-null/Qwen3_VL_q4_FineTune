@@ -1,0 +1,7 @@
+source_file,type,logic_adapter,noise_adapter,label,logic_weight,noise_weight,structural_f1,specialized_em,passes_gate,group,folder_name,epoch,train_ratio,note
+compose_results_1536.json,compose,clean_data/paige-lora-condition-clean_data-epoch-1.5,paige-lora-condition-noise_r32-epoch-8,L9_N0,0.97,0.03,0.9335,0.38,False,composed,,,,
+compose_results_1536.json,compose,clean_data/paige-lora-condition-clean_data-epoch-1.5,paige-lora-condition-noise_r32-epoch-8,L9_N0,0.97,0.03,0.9335,0.38,False,composed,,,,
+Eval_result\final_res\paige-lora-condition-E-epoch-1,adapter_folder,,,,,,,,,70/30,paige-lora-condition-E-epoch-1,1,70/30,Initial 70/30 setup; later revised to 2:1 for task focus
+Eval_result\final_res\paige-lora-condition-E-epoch-1.5,adapter_folder,,,,,,,,,70/30,paige-lora-condition-E-epoch-1.5,1.5,70/30,Initial 70/30 setup; later revised to 2:1 for task focus
+Eval_result\final_res\paige-lora-condition-E-epoch-2,adapter_folder,,,,,,,,,70/30,paige-lora-condition-E-epoch-2,2,70/30,Initial 70/30 setup; later revised to 2:1 for task focus
+Eval_result\final_res\paige-lora-condition-E-epoch-3,adapter_folder,,,,,,,,,70/30,paige-lora-condition-E-epoch-3,3,70/30,Initial 70/30 setup; later revised to 2:1 for task focus

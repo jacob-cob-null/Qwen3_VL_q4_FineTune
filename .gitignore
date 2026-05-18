@@ -28,3 +28,7 @@ Eval_result
 tests
 eval_tiered_v1.jsonl
 eval_tiered_v1.report.json
+
+new_test
+Datasets
+.claude

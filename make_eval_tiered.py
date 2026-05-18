@@ -8,6 +8,7 @@ Normalizes image paths to workspace-relative and validates image existence.
 import os
 import json
 import random
+import argparse
 from collections import defaultdict
 
 WORKSPACE_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -28,12 +29,19 @@ def normalize_image_path(p):
     idx = p_norm.find('Datasets/')
     if idx != -1:
         rel = p_norm[idx:]
+        # SROIE test image path fix: canonical JSON points to Training_Data but images exist in Testing_Data
+        if "sroie_2019_v2" in rel and "Training_Data/golden/sources/" in rel:
+            rel = rel.replace("Training_Data/golden/sources/", "Testing_Data/")
         return rel
     # If absolute under workspace root, make relative
     wp = WORKSPACE_ROOT.replace('\\','/')
     if p_norm.startswith(wp):
         rel = p_norm[len(wp)+1:]
         return rel
+    # pAIge synthetic paths are stored as 'synthetic/images/test/...'
+    # and live under Datasets/Testing_Data/ — prefix accordingly.
+    if p_norm.startswith('synthetic/'):
+        return 'Datasets/Testing_Data/' + p_norm
     # Otherwise return as-is but normalized slashes
     return p_norm
 
@@ -189,23 +197,56 @@ def write_report(path, report):
         json.dump(report, f, indent=2)
 
 def main():
-    synth_path = os.path.join('Datasets', 'Testing_Data', 'synthetic', 'canonical', 'test.raw.jsonl')
+    parser = argparse.ArgumentParser(
+        description="Build eval_tiered_v1.jsonl from pAIge synthetic + invoice + SROIE sources."
+    )
+    parser.add_argument(
+        "--synth-source", type=str, default=None,
+        help=(
+            "Path to the pAIge synthetic test JSONL to use for the Specialized tier. "
+            "Defaults to Datasets/Testing_Data/synthetic/canonical/test.raw.jsonl. "
+            "Pass the new realistic pAIge output here after it has been generated."
+        ),
+    )
+    parser.add_argument(
+        "--stress-level", type=str, default="low",
+        choices=["low", "high"],
+        help=(
+            "Stress level label to attach to the Specialized tier samples. "
+            "Use 'low' for realistic/weak-filter images (default), "
+            "'high' for the original strong-filter (>=0.55 intensity) images."
+        ),
+    )
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="Override the output JSONL path (default: eval_tiered_v1.jsonl in workspace root).",
+    )
+    args = parser.parse_args()
+
+    synth_path = args.synth_source or os.path.join(
+        'Datasets', 'Testing_Data', 'synthetic', 'weak', 'canonical', 'test.raw.jsonl'
+    )
     mixed_path = os.path.join('Datasets', 'Testing_Data', 'mixed_test_226.jsonl')
     sroie_path = os.path.join('Datasets', 'Testing_Data', 'sroie_2019_v2', 'canonical', 'test.jsonl')
+
+    stress = args.stress_level  # 'low' for realistic filter, 'high' for old strong-filter
+
+    print(f"  Synthetic source : {synth_path}")
+    print(f"  Stress level     : {stress}")
 
     tier1 = select_synthetic(synth_path, k=50, per_group_n=5, seed=42)
     tier2 = select_invoices(mixed_path, k=100, seed=42)
     tier3 = select_sroie(sroie_path, k=100, seed=42)
 
     # Annotate
-    tier1 = annotate_and_normalize(tier1, 'Specialized', stress_level='high')
+    tier1 = annotate_and_normalize(tier1, 'Specialized', stress_level=stress)
     tier2 = annotate_and_normalize(tier2, 'Structural')
     tier3 = annotate_and_normalize(tier3, 'Baseline')
 
     merged = tier1 + tier2 + tier3
     merged = uniquify_ids(merged)
 
-    out_file = os.path.join(WORKSPACE_ROOT, 'eval_tiered_v1.jsonl')
+    out_file = args.output or os.path.join(WORKSPACE_ROOT, 'eval_tiered_v1.jsonl')
     write_jsonl(out_file, merged)
 
     # Validation summary
@@ -216,6 +257,8 @@ def main():
             'Baseline': len(tier3),
             'total': len(merged)
         },
+        'stress_level': stress,
+        'synth_source': synth_path,
         'missing_images': [],
         'duplicate_ids': []
     }
@@ -234,6 +277,10 @@ def main():
     print('Wrote', out_file)
     print('Report written to', report_path)
     print(json.dumps(report['counts'], indent=2))
+    if report['missing_images']:
+        print(f"  WARNING: {len(report['missing_images'])} samples have missing images.")
+        for m in report['missing_images'][:5]:
+            print(f"    {m['sample_id']} -> {m['image_path']}")
 
 if __name__ == '__main__':
     main()

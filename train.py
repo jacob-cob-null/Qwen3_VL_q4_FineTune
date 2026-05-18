@@ -109,11 +109,31 @@ def resolve_image_path(image_path):
 
 
 # --- CONFIGURATION ---
+# High-noise pAIge training pool — set by pAIge [A] regeneration run.
+# When condition id == 'noise_r16', run_train() loads from this path
+# instead of the merged golden JSONL.
+NOISE_POOL_PATH = os.path.join(
+    "Datasets", "Training_Data", "golden", "sources",
+    "paige_synthetic", "high_noise", "train.jsonl"
+)
+
 CONDITIONS = [
     {"id": "A", "size": 500,  "synth_ratio": 0.30, "seed": 42, "epochs": 1},
-    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44, "epochs": 1},  
+    {"id": "C", "size": 1000, "synth_ratio": 0.30, "seed": 44, "epochs": 1},
     {"id": "E", "size": 2000, "synth_ratio": 0.30, "seed": 46, "epochs": [1, 1.5, 2, 3]},
-    {"id": "clean_data", "size": 1200, "synth_ratio": 800/1200, "seed": 42, "epochs": [1.0, 1.5, 2.0, 2.5, 3.0]}
+    {"id": "clean_data", "size": 1200, "synth_ratio": 800/1200, "seed": 42,
+     "epochs": [1.0, 1.5, 2.0, 2.5, 3.0]},
+    # ── Phase 2: noise adapter ────────────────────────────────────────────
+    # Trained exclusively on high-noise pAIge images (intensity >= 0.55).
+    # r=16 / alpha=32 keeps it lightweight for add_weighted_adapter merging.
+    # finetune_vision_layers=True forces the visual encoder to learn
+    # noise-invariant features rather than just adapting the LM head.
+    # Depends on pAIge [A] having regenerated the high-noise training pool.
+    {"id": "noise_r32", "size": 800, "synth_ratio": 1.0, "seed": 42,
+     "epochs": [5, 8],
+     "lora_r": 32, "lora_alpha": 64,
+     "finetune_vision_layers": True,
+     "noise_pool": True},          # flag: load from NOISE_POOL_PATH instead
     # {"id": "B", "size": 500,  "synth_ratio": 0.40, "seed": 43, "epochs": 1},
     # {"id": "D", "size": 1000, "synth_ratio": 0.40, "seed": 45, "epochs": 1},
     # {"id": "F", "size": 2000, "synth_ratio": 0.40, "seed": 47, "epochs": 1},
@@ -130,7 +150,17 @@ def build_condition(real_data, synthetic_pool, total_size, synth_ratio, seed):
     random.shuffle(combined)
     return combined
 
-def setup_model():
+def setup_model(lora_r=32, lora_alpha=64, finetune_vision_layers=False):
+    """
+    Load Qwen3-VL-4B and wrap with LoRA.
+
+    Args:
+        lora_r:                 LoRA rank (default 32 for logic adapter).
+        lora_alpha:             LoRA alpha (default 64).
+        finetune_vision_layers: Whether to unfreeze the visual encoder.
+                                Set True for the noise_r16 adapter so it
+                                learns noise-invariant visual features.
+    """
     if not UNSLOTH_AVAILABLE:
         return None, None
     model_id = "Qwen/Qwen3-VL-4B-Instruct"
@@ -139,25 +169,27 @@ def setup_model():
         load_in_4bit=True,
         torch_dtype=torch.float16,
     )
-    
+
     actual_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
-    
+
     # Fix mismatched tokens issue
     if actual_tokenizer.pad_token is None:
-        # Default fallback for Qwen models
         actual_tokenizer.pad_token = "<|endoftext|>"
-        
+
     if len(actual_tokenizer) != model.get_input_embeddings().weight.shape[0]:
         model.resize_token_embeddings(len(actual_tokenizer))
 
+    print(f"  setup_model: r={lora_r}, alpha={lora_alpha}, "
+          f"finetune_vision_layers={finetune_vision_layers}")
+
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers=False,
+        finetune_vision_layers=finetune_vision_layers,
         finetune_language_layers=True,
         finetune_attention_modules=True,
         finetune_mlp_modules=True,
-        r=32, 
-        lora_alpha=64,
+        r=lora_r,
+        lora_alpha=lora_alpha,
         lora_dropout=0,
         random_state=42,
     )
@@ -203,6 +235,7 @@ def get_training_args(condition_id, is_smoke_test=False, epoch=1):
         "fp16": False,
         # Conservative LR to avoid catastrophic forgetting of base model priors
         "learning_rate": 5e-5,
+        "lr_scheduler_type": "constant",
         "max_seq_length": 2048,
         "logging_steps": 10,
         "save_total_limit": 1,
@@ -423,15 +456,49 @@ def run_train(is_smoke_test, selected_ids=None):
     for condition in run_conditions:
         print(f"\n{'='*60}\nACTIVE SESSION: Condition {condition['id']}\n{'='*60}")
 
-        model, tokenizer = setup_model()
-        
-        train_data = build_condition(
-            real_data=real_images,
-            synthetic_pool=synthetic_images,
-            total_size=condition["size"],
-            synth_ratio=condition["synth_ratio"],
-            seed=condition["seed"],
+        # Per-condition LoRA config (noise_r16 uses r=16 + vision layers)
+        model, tokenizer = setup_model(
+            lora_r=condition.get("lora_r", 32),
+            lora_alpha=condition.get("lora_alpha", 64),
+            finetune_vision_layers=condition.get("finetune_vision_layers", False),
         )
+
+        # noise_r16 loads exclusively from the high-noise pAIge pool
+        if condition.get("noise_pool"):
+            if not os.path.exists(NOISE_POOL_PATH):
+                print(f"  ERROR: noise_r16 requires high-noise training pool at:\n"
+                      f"  {NOISE_POOL_PATH}\n"
+                      f"  Run pAIge [A] (strong-filter regeneration) first.")
+                continue
+            print(f"  Loading noise pool from {NOISE_POOL_PATH}")
+            noise_samples = []
+            with open(NOISE_POOL_PATH, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        item = json.loads(line)
+                    except Exception:
+                        continue
+                    raw_img_path = item.get("image_path", "")
+                    gt = item.get("ground_truth", {})
+                    if not any(gt.get(f) is not None for f in _TARGET_FIELDS):
+                        continue
+                    msgs = item.get("messages", []) or _build_messages_from_ground_truth(gt)
+                    noise_samples.append({
+                        "image": resolve_image_path(raw_img_path),
+                        "ground_truth": gt,
+                        "messages": msgs,
+                        "is_synthetic": True,
+                    })
+            train_data = noise_samples[:condition["size"]]
+            print(f"  Loaded {len(train_data)} high-noise samples for noise_r16.")
+        else:
+            train_data = build_condition(
+                real_data=real_images,
+                synthetic_pool=synthetic_images,
+                total_size=condition["size"],
+                synth_ratio=condition["synth_ratio"],
+                seed=condition["seed"],
+            )
 
         # For smoke tests with real data, cap at 32 samples to keep runtime short.
         # When real data is NOT available, fall back to minimal dummy samples so
