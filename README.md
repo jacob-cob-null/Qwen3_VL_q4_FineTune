@@ -39,6 +39,18 @@ python verify_gpu.py
 
 Expects CUDA 12.1 available and ~12 GB VRAM free.
 
+## Licensing and provenance
+
+Original source code is licensed under the MIT License in `LICENSE`. Model adapters,
+external datasets, document images, and generated outputs are not covered by that
+license. See `THIRD_PARTY_NOTICES.md` for the required upstream model and dataset
+references, attribution boundary, and redistribution cautions.
+
+The adapters are LoRA derivatives of the Qwen3-VL/Unsloth base model and must be
+used under the applicable upstream terms. Dataset records reference CORD v2,
+Invoices-Donut v1, and SROIE 2019 v2; their licenses and redistribution rules
+remain separate.
+
 ## Workflow
 
 **Train**
