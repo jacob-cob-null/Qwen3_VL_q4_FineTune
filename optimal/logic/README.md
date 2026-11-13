@@ -30,7 +30,7 @@ tags:
 - **Shared by [optional]:** [More Information Needed]
 - **Model type:** [More Information Needed]
 - **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
+- **License:** See repository `THIRD_PARTY_NOTICES.md`; adapter weights are not independently relicensed.
 - **Finetuned from model [optional]:** [More Information Needed]
 
 ### Model Sources [optional]
